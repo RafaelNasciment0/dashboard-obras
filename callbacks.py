@@ -124,11 +124,16 @@ def register_callbacks(app):
                 # Converte dicionários para string JSON para salvar na planilha
                 df_final['Realizado por Semana'] = df_final['Realizado por Semana'].apply(json.dumps)
                 df_final['Planejamento Semanal'] = df_final['Planejamento Semanal'].apply(json.dumps)
+                    
+                # --> INÍCIO DA CORREÇÃO <---
+                # Substitui todos os valores 'NaN' por None (nulo), que é compatível com JSON
+                df_final = df_final.replace({np.nan: None})
+                # --> FIM DA CORREÇÃO <---
 
                 # Limpa a planilha (exceto o cabeçalho) e insere os novos dados
                 sheet.clear()
                 sheet.update([df_final.columns.values.tolist()] + df_final.values.tolist())
-
+                    
                 return dbc.Alert("Dados salvos com sucesso na nuvem!", color="success", duration=4000, fade=True)
             except Exception as e:
                 return dbc.Alert(f"Falha ao salvar dados na nuvem: {e}", color="danger")
