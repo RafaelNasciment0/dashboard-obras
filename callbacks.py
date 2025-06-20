@@ -1,5 +1,5 @@
 # -----------------------------------------------------------------------------
-# Arquivo: callbacks.py (Versão Final e Definitiva)
+# Arquivo: callbacks.py (VERSÃO MODIFICADA PARA GOOGLE SHEETS)
 # -----------------------------------------------------------------------------
 from dash import dcc, html, Input, Output, State, callback_context, no_update, dash_table, ALL
 import dash_bootstrap_components as dbc
@@ -10,16 +10,47 @@ import numpy as np
 import json
 import os
 from datetime import datetime
+
+# NOVAS IMPORTAÇÕES PARA GOOGLE SHEETS
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 from io import StringIO
 
 from utils import recalculate_dataframe
 
 PLOTLY_TEMPLATE = "plotly_white"
-DATA_FILE = "project_data.json"
+
+# --- CONFIGURAÇÃO DO GOOGLE SHEETS ---
+# O nome da sua planilha
+GOOGLE_SHEET_NAME = 'DadosDashboardObras' 
+
+# Define os "escopos" de permissão que nossa aplicação precisa
+SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+
+# Esta variável de ambiente guardará nossas credenciais de forma segura no Render
+# Vamos configurar isso no Passo 5
+CREDS_JSON_STRING = os.environ.get('GOOGLE_CREDENTIALS_JSON', None)
+
+def get_google_sheet():
+    """Função auxiliar para conectar e obter a planilha"""
+    if CREDS_JSON_STRING is None:
+        print("ERRO: A variável de ambiente 'GOOGLE_CREDENTIALS_JSON' não foi encontrada.")
+        return None
+
+    try:
+        creds_dict = json.loads(CREDS_JSON_STRING)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
+        client = gspread.authorize(creds)
+        sheet = client.open(GOOGLE_SHEET_NAME).sheet1
+        return sheet
+    except Exception as e:
+        print(f"Erro ao conectar com o Google Sheets: {e}")
+        return None
 
 def get_empty_df():
     return pd.DataFrame(columns=['Obra', 'Frente', 'Total', 'Data Início', 'Data Fim', 'Realizado por Semana', 'Planejamento Semanal'])
 
+# RESTANTE DAS FUNÇÕES AUXILIARES (get_weeks_in_range, etc.) PERMANECE IGUAL
 def get_weeks_in_range(start_date, end_date):
     if pd.isna(start_date) or pd.isna(end_date):
         return []
@@ -31,6 +62,7 @@ def get_weeks_in_range(start_date, end_date):
 
 def register_callbacks(app):
 
+    # --- CALLBACK MODIFICADO ---
     @app.callback(
         Output('data-store', 'data', allow_duplicate=True),
         Output('obra-filter', 'options'),
@@ -40,19 +72,35 @@ def register_callbacks(app):
         prevent_initial_call='initial_duplicate'
     )
     def load_initial_data(_):
-        if os.path.exists(DATA_FILE) and os.path.getsize(DATA_FILE) > 0:
-            try:
-                df = pd.read_json(DATA_FILE, orient='split')
-                for col in ['Realizado por Semana', 'Planejamento Semanal']:
-                    if col not in df.columns: df[col] = [{} for _ in range(len(df))]
-                df_recalc = recalculate_dataframe(df)
-                obras = sorted(df['Obra'].unique()) if 'Obra' in df.columns else []
-                return df_recalc.to_json(date_format='iso', orient='split'), [{'label': o, 'value': o} for o in obras], obras[0] if obras else None, dbc.Alert(f"Dados de '{DATA_FILE}' carregados.", color="info", duration=3000, fade=True)
-            except Exception as e:
-                return get_empty_df().to_json(date_format='iso', orient='split'), [], None, dbc.Alert(f"Erro ao carregar dados: {e}. Verifique o formato do 'project_data.json'.", color="danger")
-        else:
-            return get_empty_df().to_json(date_format='iso', orient='split'), [], None, dbc.Alert("Nenhum dado salvo encontrado.", color="warning", duration=5000, fade=True)
+        sheet = get_google_sheet()
+        if sheet is None:
+            return get_empty_df().to_json(date_format='iso', orient='split'), [], None, dbc.Alert("Falha ao conectar com a base de dados (Google Sheets).", color="danger")
 
+        try:
+            # Lê todos os dados da planilha
+            records = sheet.get_all_records()
+            if not records: # Se a planilha estiver vazia (só com cabeçalho)
+                df = get_empty_df()
+            else:
+                df = pd.DataFrame(records)
+
+            # Tratamento de dados lidos da planilha
+            for col in ['Realizado por Semana', 'Planejamento Semanal']:
+                if col not in df.columns:
+                    df[col] = '' # Adiciona colunas se não existirem
+                # Converte strings de dicionário (se vierem como string) para dict
+                df[col] = df[col].apply(lambda x: json.loads(x) if isinstance(x, str) and x.strip().startswith('{') else (x if isinstance(x, dict) else {}))
+
+            df['Data Início'] = pd.to_datetime(df['Data Início'], errors='coerce')
+            df['Data Fim'] = pd.to_datetime(df['Data Fim'], errors='coerce')
+
+            df_recalc = recalculate_dataframe(df)
+            obras = sorted(df['Obra'].unique()) if 'Obra' in df.columns else []
+            return df_recalc.to_json(date_format='iso', orient='split'), [{'label': o, 'value': o} for o in obras], obras[0] if obras else None, dbc.Alert(f"Dados da planilha '{GOOGLE_SHEET_NAME}' carregados.", color="info", duration=3000, fade=True)
+        except Exception as e:
+            return get_empty_df().to_json(date_format='iso', orient='split'), [], None, dbc.Alert(f"Erro ao ler dados da planilha: {e}.", color="danger")
+
+    # --- CALLBACK MODIFICADO ---
     @app.callback(
         Output('persistence-feedback-message', 'children', allow_duplicate=True),
         Input('btn-persistir-dados', 'n_clicks'),
@@ -61,13 +109,29 @@ def register_callbacks(app):
     )
     def persist_data_to_file(n_clicks, data_json):
         if n_clicks and data_json:
+            sheet = get_google_sheet()
+            if sheet is None:
+                return dbc.Alert("Falha ao conectar com a base de dados (Google Sheets) para salvar.", color="danger")
+
             try:
                 df_to_save = pd.read_json(StringIO(data_json), orient='split')
                 cols_to_save = ['Obra', 'Frente', 'Total', 'Data Início', 'Data Fim', 'Realizado por Semana', 'Planejamento Semanal']
-                df_to_save[cols_to_save].to_json(DATA_FILE, orient='split', indent=4)
-                return dbc.Alert("Dados salvos com sucesso!", color="success", duration=4000, fade=True)
+
+                # Prepara o DataFrame para ser salvo
+                df_final = df_to_save[cols_to_save].copy()
+                df_final['Data Início'] = pd.to_datetime(df_final['Data Início']).dt.strftime('%Y-%m-%d').replace('NaT', '')
+                df_final['Data Fim'] = pd.to_datetime(df_final['Data Fim']).dt.strftime('%Y-%m-%d').replace('NaT', '')
+                # Converte dicionários para string JSON para salvar na planilha
+                df_final['Realizado por Semana'] = df_final['Realizado por Semana'].apply(json.dumps)
+                df_final['Planejamento Semanal'] = df_final['Planejamento Semanal'].apply(json.dumps)
+
+                # Limpa a planilha (exceto o cabeçalho) e insere os novos dados
+                sheet.clear()
+                sheet.update([df_final.columns.values.tolist()] + df_final.values.tolist())
+
+                return dbc.Alert("Dados salvos com sucesso na nuvem!", color="success", duration=4000, fade=True)
             except Exception as e:
-                return dbc.Alert(f"Falha ao salvar dados: {e}", color="danger")
+                return dbc.Alert(f"Falha ao salvar dados na nuvem: {e}", color="danger")
         return no_update
 
     @app.callback(
