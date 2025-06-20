@@ -1,0 +1,35 @@
+{
+    "columns": [
+        "Obra",
+        "Frente",
+        "Total",
+        "Data Início",
+        "Data Fim",
+        "Realizado por Semana",
+        "Planejamento Semanal"
+    ],
+    "index": [
+        0,
+        1
+    ],
+    "data": [
+        [
+            "Terras Alphaville Teresina 2",
+            "---",
+            0,
+            null,
+            null,
+            {},
+            {}
+        ],
+        [
+            "Alphaville Teresina 2",
+            "---",
+            0,
+            null,
+            null,
+            {},
+            {}
+        ]
+    ]
+}
